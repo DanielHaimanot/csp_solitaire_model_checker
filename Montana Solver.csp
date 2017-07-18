@@ -1,0 +1,158 @@
+{- 
+The montana implementation finds soluble deals when the suit size (M) is 11 or smaller. 
+Unsoluble deals have been found at M = 13. However due to the implementation's state size, no 
+soluble solutions could be found in a reasonable amount of time for M = 13. In the code I made 
+some suggestion on restrictions that might have been able decrease the state space of my 
+implementation. The deals I found with the solution are:   
+
+Soluble Deals: 
+M 11    : Seed = 19
+M = 10  : Seed = 19,18,16,12,11,10
+M = 8   : Seed = 5
+
+Unsoluble Deals: 
+M = 13  : Seed = 3, 13
+M = 10  : Seed = 20, 17, 15, 14, 13
+-}
+
+seed = 10   -- Seed for pseudorandom deal
+
+-- Defining cards as a data type
+datatype suits = Clubs | Hearts | Spades | Diamonds
+
+Blacks = {Clubs,Spades}
+Reds = {Hearts,Diamonds}
+colour(s) = if member(s,Blacks) then 0 else 1
+
+M = 10-- length of each suit
+
+-- Some basic definitions
+datatype cards = Card.suits.{1..M}
+
+Ace = 1
+Jack = M-2
+Queen = M-1
+King = M
+kings = {Card.s.King | s <- suits}
+isking(Card.S.n) = n==M
+isace(Card.S.n) = n==1
+istwo(Card.S.n) = n==2
+twos = {Card.s.2 | s <- suits}
+posns = {(i,j) | i <- {1..4},j <-{1..M}}
+
+-- Events: using the philosophy of splitting a move into two halves,
+-- and using separate events for second halves that do and don't move
+-- a card to a final position.
+
+channel done
+channel move1,move2,move2f,absorb:posns.cards
+
+Full(i,j,c,finished) = not finished & move1.(i,j).c -> Empty(i,j)
+            [] j<M and not(isking(c)) and finished & move2f.(i,j+1).next(c) -> Full(i,j,c,finished)
+            [] j<M and not(isking(c)) and not finished & move2.(i,j+1).next(c) -> Full(i,j,c,finished)
+            [] finished & done -> Full(i,j,c,finished)
+            [] not finished & absorb.(i,j).c -> Full(i,j,c,true)
+            [] ((istwo(c) and j == 1) or finished) and j<(M-1) and not(isking(c)) -- Can't absorb after king
+                                      & absorb.(i,j+1).next(c) -> Full(i,j,c,true)
+            {- If it is a two in the first column, then the process can be finished, 
+                and absorb the next one in the link -}
+
+next(Card.S.n) = Card.S.n+1
+
+-- An empty slot in the first column, can only be filled by a two. 
+Empty(i,1) = move2f.(i,1)?c:twos -> Full(i,1,c,true)
+
+Empty(i,j) = move2.(i,j)?c -> Full(i,j,c,false)
+            [] move2f.(i,j)?c -> Full(i,j,c,true)
+
+Alpha(i,j) = Union({
+                   {|move1.(i,j), move2.(i,j),move2f.(i,j)|},
+                   {|move2.(i,j+1),move2f.(i,j+1) | j < M|},
+                   {|absorb.(i,j) | j<M|}, -- There is a process to sync with absorb for all events but the first
+                   {|absorb.(i,j+1) | j < M-1|},
+                   {|done | j < M|}
+                   })
+
+{- 
+- Pick up a card, and put it down on an empty spot. (Can't pick a card and put it down at the same spot)
+Restrict the choice of cards for pickup to the moves that are valid for the empty spot. With the current
+implementation for each move1 any position, or card can be chosen. Another possible improvement is to 
+restrict the choice moves by card color. 
+-}
+Mover = move1?p?c -> (move2?q!c -> Mover 
+                      [] move2f?q!c -> Mover)
+
+-- Code for generating random deals from the seed
+NC= 4*M
+
+AllCards = <Card.S.n | S <- <Hearts,Clubs,Diamonds,Spades>,n <- <1..M>>
+
+Deal = randdeal(seed)
+{-
+Deal = <Card.Clubs.2, Card.Clubs.5, Card.Clubs.4, Card.Spades.2, Card.Hearts.3, 
+Card.Spades.1, Card.Hearts.1, Card.Spades.4,Card.Spades.5, Card.Spades.3, 
+Card.Diamonds.2, Card.Diamonds.3, Card.Diamonds.4, Card.Diamonds.5, Card.Diamonds.1, 
+Card.Hearts.2, Card.Clubs.3, Card.Hearts.4, Card.Hearts.5, Card.Hearts.1>
+-}
+
+Init(i,j) = nth((i-1)*M+j,Deal) -- The card at position (i,j) in the deal, 
+                                -- including aces
+
+row(i) = <Init(i,j) | j <- <1..M>>
+
+Place(i,j) = if isace(Init(i,j)) then Empty(i,j) else Full(i,j,Init(i,j),false)
+
+Array = || i:{1..4},j:{1..M} @ [Alpha(i,j)] Place(i,j)
+--move1,
+---  Setting out the puzzle
+-- Some functional programming constructs  used earlier
+Puzzle = (Array [|{|move2,move2f,move1|}|] Mover )
+                     -- Mover'(Empty',Full')) --[|{|absorb|}|] (||| x:{1..4}@Abs(x))
+-----
+assert STOP [T= (Puzzle \ {|move1,move2,move2f,absorb|})
+-----
+
+take(0,L) = <>
+take(n,L) = <head(L)>^take(n-1,tail(L))
+
+drop(0,L) = L
+drop(n,L) = drop(n-1,tail(L))
+
+nth(1,xs) = head(xs)
+nth(n,xs) = nth(n-1,tail(xs))
+
+-- Generaling a pseudorandom series of integers from the seed
+randseries(n) =
+     let seeds(1) = <n>
+         seeds(n) = let <m>^s = seeds(n-1)  
+                    within <f(m),m>^s
+         f(m) = ((m%90001)*C1 + C2*n +C3)%C
+      within seeds(NC)
+
+C1 = 33331
+
+C2 = 1020601
+
+C3 = 123457
+
+C = 2000000011
+
+randseriesc(n) = zipwithm(randseries(n),crs)
+
+crs = <NC-i | i <- <0..NC-1>>   
+
+zipwithm(<>,ys) = <>
+zipwithm(xs,<>) = <>
+zipwithm(<x>^xs,<y>^ys) = <x%y>^zipwithm(xs,ys)
+
+randdeal(n)= succtake(randseriesc(n),AllCards)
+
+succtake(<>,<>) = <>
+succtake(<n>^ns,xs) = let c1 = nth(n+1,xs)
+                          rst = drop1(n+1,xs)
+                      within <c1>^succtake(ns,rst)
+
+drop1(n,xs) = take(n-1,xs)^drop(n,xs)
+
+----------------------------------------------------
+
